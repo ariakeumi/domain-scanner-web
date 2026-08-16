@@ -6,13 +6,11 @@
 #   docker compose logs -f        # follow logs
 #
 # Optional overrides (environment variables):
-#   DOCKER_IMAGE  image name   (default: q000q000/domain-scanner-web)
-#   DOCKER_TAG    image tag    (default: latest)
-#   PORT          host port    (default: 8080, mapped to container port 8080)
+#   PORT   host port   (default: 8080, mapped to container port 8080)
 
 services:
   domain-scanner:
-    image: ${DOCKER_IMAGE:-q000q000/domain-scanner-web}:${DOCKER_TAG:-latest}
+    image: q000q000/domain-scanner-web:latest
     container_name: domain-scanner
     restart: unless-stopped
     ports:

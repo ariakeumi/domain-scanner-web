@@ -124,7 +124,7 @@ go run main.go -web -addr 127.0.0.1:8080
 
 ```bash
 docker run -d -p 8080:8080 -v domain-scanner-data:/app/data \
-  --name domain-scanner q000q000/domain-scanner-web
+  --name domain-scanner q000q000/domain-scanner-web:latest
 # 然后打开 http://localhost:8080
 ```
 
@@ -135,11 +135,11 @@ docker compose up -d
 # 然后打开 http://localhost:8080
 ```
 
-自带的 `docker-compose.yml` 默认拉取 `q000q000/domain-scanner-web:latest`，
-并挂载一个命名数据卷用于保存扫描历史。可通过环境变量覆盖，例如：
+自带的 `docker-compose.yml` 使用 `q000q000/domain-scanner-web:latest` 镜像，
+并挂载一个命名数据卷用于保存扫描历史。可通过环境变量修改宿主机端口，例如：
 
 ```bash
-DOCKER_IMAGE=yourname/domain-scanner PORT=9000 docker compose up -d
+PORT=9000 docker compose up -d
 ```
 
 停止：`docker compose down`（加 `-v` 可同时删除已保存的历史）。

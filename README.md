@@ -135,7 +135,7 @@ Run the web interface in a container (amd64 & arm64):
 
 ```bash
 docker run -d -p 8080:8080 -v domain-scanner-data:/app/data \
-  --name domain-scanner q000q000/domain-scanner-web
+  --name domain-scanner q000q000/domain-scanner-web:latest
 # then open http://localhost:8080
 ```
 
@@ -146,12 +146,12 @@ docker compose up -d
 # then open http://localhost:8080
 ```
 
-The included `docker-compose.yml` pulls `q000q000/domain-scanner-web:latest` by
-default and mounts a named volume for scan history. Override it with
-environment variables, e.g.:
+The included `docker-compose.yml` runs `q000q000/domain-scanner-web:latest`
+and mounts a named volume for scan history. Change the host port with an
+environment variable, e.g.:
 
 ```bash
-DOCKER_IMAGE=yourname/domain-scanner PORT=9000 docker compose up -d
+PORT=9000 docker compose up -d
 ```
 
 Stop it with `docker compose down` (add `-v` to also delete the stored history).
