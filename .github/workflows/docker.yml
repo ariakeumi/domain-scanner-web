@@ -14,10 +14,11 @@ on:
   workflow_dispatch:
 
 env:
-  # Docker Hub repository name, e.g. "yourname/domain-scanner".
-  # Set the DOCKER_IMAGE repository variable in GitHub (Settings -> Secrets and
-  # variables -> Actions -> Variables) to override. Defaults to <owner>/<repo>.
-  IMAGE_NAME: ${{ vars.DOCKER_IMAGE || github.repository }}
+  # Docker Hub image name. Defaults to "<docker-hub-username>/domain-scanner-web"
+  # using the DOCKERHUB_USERNAME secret. Set the DOCKER_IMAGE repository
+  # variable in GitHub (Settings -> Secrets and variables -> Actions ->
+  # Variables) to override, e.g. "yourname/domain-scanner".
+  IMAGE_NAME: ${{ vars.DOCKER_IMAGE || format('{0}/domain-scanner-web', secrets.DOCKERHUB_USERNAME) }}
 
 permissions:
   contents: read
