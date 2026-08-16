@@ -134,9 +134,25 @@ go run main.go -web -addr 127.0.0.1:8080
 Run the web interface in a container (amd64 & arm64):
 
 ```bash
-docker run -d -p 8080:8080 --name domain-scanner yourname/domain-scanner
+docker run -d -p 8080:8080 --name domain-scanner q000q000/domain-scanner-web
 # then open http://localhost:8080
 ```
+
+Deploy with Docker Compose:
+
+```bash
+docker compose up -d
+# then open http://localhost:8080
+```
+
+The included `docker-compose.yml` pulls `q000q000/domain-scanner-web:latest` by
+default. Override it with environment variables, e.g.:
+
+```bash
+DOCKER_IMAGE=yourname/domain-scanner PORT=9000 docker compose up -d
+```
+
+Stop it with `docker compose down` (add `-v` to also remove the volume).
 
 Build locally:
 

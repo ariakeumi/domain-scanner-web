@@ -1,0 +1,19 @@
+# Docker Compose for domain-scanner-web
+#
+# Usage:
+#   docker compose up -d          # start (image q000q000/domain-scanner-web:latest, host port 8080)
+#   docker compose down           # stop and remove
+#   docker compose logs -f        # follow logs
+#
+# Optional overrides (environment variables):
+#   DOCKER_IMAGE  image name   (default: q000q000/domain-scanner-web)
+#   DOCKER_TAG    image tag    (default: latest)
+#   PORT          host port    (default: 8080, mapped to container port 8080)
+
+services:
+  domain-scanner:
+    image: ${DOCKER_IMAGE:-q000q000/domain-scanner-web}:${DOCKER_TAG:-latest}
+    container_name: domain-scanner
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"

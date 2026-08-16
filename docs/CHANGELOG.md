@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Docker Compose**: Added `docker-compose.yml` for one-command deployment (`docker compose up -d`), with `DOCKER_IMAGE` / `DOCKER_TAG` / `PORT` overrides
 - **Docker Support**: Multi-stage `Dockerfile` (non-root, CA certs, health check) plus a GitHub Actions workflow (`.github/workflows/docker.yml`) that builds `linux/amd64` + `linux/arm64` images and pushes them to Docker Hub on pushes to the default branch or `v*` tags
 - **Scan History Selector**: Top bar dropdown to switch between past in-memory scans, with a "载入参数" button to load a past scan's options back into the form
 - **Dark Mode**: Manual theme toggle (persisted in localStorage) that follows the system preference by default

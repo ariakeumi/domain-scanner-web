@@ -123,9 +123,25 @@ go run main.go -web -addr 127.0.0.1:8080
 在容器中运行 Web 界面（支持 amd64 和 arm64）：
 
 ```bash
-docker run -d -p 8080:8080 --name domain-scanner yourname/domain-scanner
+docker run -d -p 8080:8080 --name domain-scanner q000q000/domain-scanner-web
 # 然后打开 http://localhost:8080
 ```
+
+使用 Docker Compose 部署：
+
+```bash
+docker compose up -d
+# 然后打开 http://localhost:8080
+```
+
+自带的 `docker-compose.yml` 默认拉取 `q000q000/domain-scanner-web:latest`，
+可通过环境变量覆盖，例如：
+
+```bash
+DOCKER_IMAGE=yourname/domain-scanner PORT=9000 docker compose up -d
+```
+
+停止：`docker compose down`（加 `-v` 可同时删除数据卷）。
 
 本地构建：
 
