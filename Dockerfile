@@ -28,7 +28,7 @@ FROM alpine:3.20
 # ca-certificates: needed for TLS/DNS checks and HTTPS; tzdata: consistent timestamps
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -S scanner && adduser -S -G scanner -u 10001 scanner \
-    && mkdir -p /app && chown -R scanner:scanner /app
+    && mkdir -p /app/data && chown -R scanner:scanner /app
 
 WORKDIR /app
 

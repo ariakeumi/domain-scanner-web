@@ -123,7 +123,8 @@ go run main.go -web -addr 127.0.0.1:8080
 在容器中运行 Web 界面（支持 amd64 和 arm64）：
 
 ```bash
-docker run -d -p 8080:8080 --name domain-scanner q000q000/domain-scanner-web
+docker run -d -p 8080:8080 -v domain-scanner-data:/app/data \
+  --name domain-scanner q000q000/domain-scanner-web
 # 然后打开 http://localhost:8080
 ```
 
@@ -135,13 +136,24 @@ docker compose up -d
 ```
 
 自带的 `docker-compose.yml` 默认拉取 `q000q000/domain-scanner-web:latest`，
-可通过环境变量覆盖，例如：
+并挂载一个命名数据卷用于保存扫描历史。可通过环境变量覆盖，例如：
 
 ```bash
 DOCKER_IMAGE=yourname/domain-scanner PORT=9000 docker compose up -d
 ```
 
-停止：`docker compose down`（加 `-v` 可同时删除数据卷）。
+停止：`docker compose down`（加 `-v` 可同时删除已保存的历史）。
+
+### 数据持久化
+
+每次扫描完成后，历史记录会保存到 `data` 目录（默认为 `./data`，文件为
+`scans.json`），启动时会自动重新加载。容器重启、重建后历史依然存在：
+
+- **Docker Compose**：命名数据卷 `scanner-data` 挂载到 `/app/data`。
+- **docker run**：加 `-v domain-scanner-data:/app/data`。
+- **直接运行二进制**：加 `-data /path/to/data`（默认 `data`）。
+
+执行 `docker compose down -v` 会删除数据卷并清空所有历史。
 
 本地构建：
 

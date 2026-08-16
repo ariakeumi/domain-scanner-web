@@ -36,6 +36,7 @@ func printHelp() {
 	fmt.Println("  -force      Skip performance warnings for large domain sets (default: false)")
 	fmt.Println("  -web        Start the browser-based web interface")
 	fmt.Println("  -addr string Web server address for -web mode (default: 127.0.0.1:8080)")
+	fmt.Println("  -data string Data directory for scan history (default: data)")
 	fmt.Println("  -h          Show help information")
 	fmt.Println("\nExamples:")
 	fmt.Println("  1. Check 3-letter .li domains with 20 workers:")
@@ -156,6 +157,7 @@ func main() {
 	force := flag.Bool("force", false, "Skip performance warnings for large domain sets")
 	webMode := flag.Bool("web", false, "Start the browser-based web interface")
 	addr := flag.String("addr", "127.0.0.1:8080", "Web server address")
+	dataDir := flag.String("data", "data", "Data directory for scan history (web mode)")
 	help := flag.Bool("h", false, "Show help information")
 	flag.Parse()
 
@@ -166,7 +168,7 @@ func main() {
 
 	if *webMode {
 		fmt.Printf("Starting web interface at http://%s\n", *addr)
-		if err := web.ListenAndServe(*addr); err != nil {
+		if err := web.ListenAndServe(*addr, *dataDir); err != nil {
 			fmt.Printf("Error starting web server: %v\n", err)
 			os.Exit(1)
 		}

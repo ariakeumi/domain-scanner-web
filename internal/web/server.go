@@ -40,22 +40,29 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-// NewServer creates a web server with an in-memory scan manager.
-func NewServer() (*Server, error) {
+// NewServer creates a web server. If dataDir is non-empty, finished scan
+// history is persisted to <dataDir>/scans.json.
+func NewServer(dataDir string) (*Server, error) {
 	staticFS, err := fs.Sub(embeddedStatic, "static")
 	if err != nil {
 		return nil, err
 	}
 
+	manager, err := scanner.NewManager(dataDir)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Server{
-		manager: scanner.NewManager(),
+		manager: manager,
 		static:  http.FileServer(http.FS(staticFS)),
 	}, nil
 }
 
-// ListenAndServe starts the web UI on addr.
-func ListenAndServe(addr string) error {
-	server, err := NewServer()
+// ListenAndServe starts the web UI on addr, persisting scan history to dataDir
+// (pass "" to disable persistence).
+func ListenAndServe(addr, dataDir string) error {
+	server, err := NewServer(dataDir)
 	if err != nil {
 		return err
 	}
@@ -140,12 +147,12 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		scan, ok := s.manager.Get(id)
+		snap, ok := s.manager.Get(id)
 		if !ok {
 			writeError(w, http.StatusNotFound, "scan not found")
 			return
 		}
-		writeJSON(w, http.StatusOK, scan.Snapshot())
+		writeJSON(w, http.StatusOK, snap)
 		return
 	}
 
@@ -158,8 +165,8 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "running scan not found")
 			return
 		}
-		scan, _ := s.manager.Get(id)
-		writeJSON(w, http.StatusOK, scan.Snapshot())
+		snap, _ := s.manager.Get(id)
+		writeJSON(w, http.StatusOK, snap)
 		return
 	}
 

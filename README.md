@@ -134,7 +134,8 @@ go run main.go -web -addr 127.0.0.1:8080
 Run the web interface in a container (amd64 & arm64):
 
 ```bash
-docker run -d -p 8080:8080 --name domain-scanner q000q000/domain-scanner-web
+docker run -d -p 8080:8080 -v domain-scanner-data:/app/data \
+  --name domain-scanner q000q000/domain-scanner-web
 # then open http://localhost:8080
 ```
 
@@ -146,13 +147,26 @@ docker compose up -d
 ```
 
 The included `docker-compose.yml` pulls `q000q000/domain-scanner-web:latest` by
-default. Override it with environment variables, e.g.:
+default and mounts a named volume for scan history. Override it with
+environment variables, e.g.:
 
 ```bash
 DOCKER_IMAGE=yourname/domain-scanner PORT=9000 docker compose up -d
 ```
 
-Stop it with `docker compose down` (add `-v` to also remove the volume).
+Stop it with `docker compose down` (add `-v` to also delete the stored history).
+
+### Data persistence
+
+Scan history is saved to a `data` directory (default `./data`, file
+`scans.json`) as soon as each scan finishes, and reloaded on startup. It
+survives container restarts and recreations:
+
+- **Docker Compose**: a named volume `scanner-data` is mounted at `/app/data`.
+- **docker run**: pass `-v domain-scanner-data:/app/data`.
+- **Running the binary directly**: pass `-data /path/to/data` (default `data`).
+
+Run `docker compose down -v` to delete the volume and clear all history.
 
 Build locally:
 

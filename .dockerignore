@@ -19,8 +19,9 @@ main
 available_domains_*
 registered_domains_*
 
-# Local config
+# Local config & data
 .env
+data
 .env.local
 .vscode
 .idea

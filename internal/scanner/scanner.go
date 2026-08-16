@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -86,11 +87,12 @@ type Snapshot struct {
 	Errors              []Result   `json:"errors"`
 }
 
-// Manager tracks in-memory scan jobs.
+// Manager tracks scan jobs, optionally persisting finished scans to disk.
 type Manager struct {
 	mu    sync.RWMutex
 	scans map[string]*Scan
 	seq   uint64
+	store *Store
 }
 
 // Scan is a running or finished scan job.
@@ -114,11 +116,21 @@ type Scan struct {
 	errors          []Result
 }
 
-// NewManager creates an empty scan manager.
-func NewManager() *Manager {
-	return &Manager{
-		scans: make(map[string]*Scan),
+// NewManager creates a scan manager. If dataDir is non-empty, finished scans
+// are persisted to <dataDir>/scans.json and loaded back on startup.
+func NewManager(dataDir string) (*Manager, error) {
+	store, err := NewStore(dataDir)
+	if err != nil {
+		return nil, err
 	}
+	m := &Manager{
+		scans: make(map[string]*Scan),
+		store: store,
+	}
+	if store != nil {
+		m.seq = m.maxSeqForDate(time.Now().Format("20060102"))
+	}
+	return m, nil
 }
 
 // Start validates options and starts a new scan.
@@ -163,13 +175,29 @@ func (m *Manager) Start(options Options) (*Scan, error) {
 	m.scans[id] = scan
 	m.mu.Unlock()
 
-	go scan.run(ctx, domainGen)
+	go func() {
+		scan.run(ctx, domainGen)
+		m.persist(scan)
+	}()
 
 	return scan, nil
 }
 
-// Get returns a scan by ID.
-func (m *Manager) Get(id string) (*Scan, bool) {
+// Get returns a snapshot for a scan ID, checking running scans first and then
+// persisted history.
+func (m *Manager) Get(id string) (Snapshot, bool) {
+	if scan, ok := m.getScan(id); ok {
+		return scan.Snapshot(), true
+	}
+	if m.store != nil {
+		if snap, ok := m.store.Get(id); ok {
+			return snap, true
+		}
+	}
+	return Snapshot{}, false
+}
+
+func (m *Manager) getScan(id string) (*Scan, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	scan, ok := m.scans[id]
@@ -178,14 +206,15 @@ func (m *Manager) Get(id string) (*Scan, bool) {
 
 // Cancel cancels a running scan.
 func (m *Manager) Cancel(id string) bool {
-	scan, ok := m.Get(id)
+	scan, ok := m.getScan(id)
 	if !ok {
 		return false
 	}
 	return scan.Cancel()
 }
 
-// List returns scan snapshots ordered newest first.
+// List returns scan snapshots ordered newest first, merging persisted history
+// with in-memory scans (in-memory scans win on ID collisions).
 func (m *Manager) List() []Snapshot {
 	m.mu.RLock()
 	scans := make([]*Scan, 0, len(m.scans))
@@ -194,20 +223,62 @@ func (m *Manager) List() []Snapshot {
 	}
 	m.mu.RUnlock()
 
-	sort.Slice(scans, func(i, j int) bool {
-		return scans[i].startedAt.After(scans[j].startedAt)
-	})
-
-	snapshots := make([]Snapshot, 0, len(scans))
-	for _, scan := range scans {
-		snapshots = append(snapshots, scan.Snapshot())
+	byID := make(map[string]Snapshot)
+	if m.store != nil {
+		for _, snap := range m.store.List() {
+			byID[snap.ID] = snap
+		}
 	}
-	return snapshots
+	for _, scan := range scans {
+		byID[scan.id] = scan.Snapshot()
+	}
+
+	list := make([]Snapshot, 0, len(byID))
+	for _, snap := range byID {
+		list = append(list, snap)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].StartedAt.After(list[j].StartedAt)
+	})
+	return list
 }
 
 func (m *Manager) nextID() string {
 	seq := atomic.AddUint64(&m.seq, 1)
 	return fmt.Sprintf("%s-%04d", time.Now().Format("20060102"), seq)
+}
+
+// persist saves a finished scan to the store.
+func (m *Manager) persist(scan *Scan) {
+	if m.store == nil {
+		return
+	}
+	snapshot := scan.Snapshot()
+	switch snapshot.Status {
+	case StatusCompleted, StatusCanceled, StatusFailed:
+		if err := m.store.Upsert(snapshot); err != nil {
+			fmt.Printf("warning: failed to persist scan %s: %v\n", snapshot.ID, err)
+		}
+	}
+}
+
+// maxSeqForDate returns the highest trailing sequence number among persisted
+// scans whose ID starts with the given date, so new IDs don't collide.
+func (m *Manager) maxSeqForDate(date string) uint64 {
+	var max uint64
+	if m.store == nil {
+		return max
+	}
+	for _, snap := range m.store.List() {
+		rest, ok := strings.CutPrefix(snap.ID, date+"-")
+		if !ok {
+			continue
+		}
+		if n, err := strconv.ParseUint(rest, 10, 64); err == nil && n > max {
+			max = n
+		}
+	}
+	return max
 }
 
 func (s *Scan) run(ctx context.Context, domainGen *generator.DomainGenerator) {
