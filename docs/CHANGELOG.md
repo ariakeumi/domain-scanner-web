@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - "载入参数" button was not enabled for the latest scan on initial page load
 - Docker workflow: removed the invalid `{{is_tag}}` expression from the `enable` attribute of `docker/metadata-action` (replaced with `flavor: latest=auto`), which fixes the "Invalid value for enable attribute" error
 - Docker workflow: upgraded all GitHub Actions to Node 24 versions (`actions/checkout@v5`, `docker/setup-qemu-action@v4`, `docker/setup-buildx-action@v4`, `docker/login-action@v4`, `docker/metadata-action@v6`, `docker/build-push-action@v7`), clearing the Node.js 20 deprecation warning
+- Docker workflow: added a step that auto-creates the Docker Hub repository on first push, fixing `push access denied ... insufficient_scope` when the repository does not exist yet
 
 ## [1.3.4] - 2025-09-02
 

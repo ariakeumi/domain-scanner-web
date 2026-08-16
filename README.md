@@ -154,9 +154,14 @@ Before it can push, configure the following in
 **GitHub → Settings → Secrets and variables → Actions**:
 
 - **Secrets**: `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`
-  (create a token at https://hub.docker.com/settings/security)
+  - Create the token at https://hub.docker.com/settings/security with
+    **Read & Write** permissions — a read-only token cannot push images.
+  - `DOCKERHUB_USERNAME` must be the same account that owns the token.
 - **Variable** (optional): `DOCKER_IMAGE` to override the repository name,
   e.g. `yourname/domain-scanner`. Defaults to `<owner>/<repo>`.
+
+The workflow automatically creates the Docker Hub repository (public) on the
+first push if it does not exist yet, so you don't have to create it manually.
 
 Tagging `v1.2.3` publishes `yourname/domain-scanner:1.2.3`, `:1.2`, and `:latest`.
 Pushes to the default branch publish `:latest` plus a `sha-<short>` tag.

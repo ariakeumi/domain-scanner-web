@@ -42,6 +42,33 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Create Docker Hub repository if it does not exist
+        if: github.event_name != 'pull_request'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ns="${IMAGE_NAME%/*}"
+          repo="${IMAGE_NAME#*/}"
+          jwt="$(curl -fsSL -X POST https://hub.docker.com/v2/users/login/ \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
+            | jq -r .token)"
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: JWT ${jwt}" \
+            "https://hub.docker.com/v2/repositories/${ns}/${repo}/")"
+          if [ "${code}" = "404" ]; then
+            echo "Repository ${IMAGE_NAME} does not exist yet, creating it..."
+            curl -fsSL -X POST https://hub.docker.com/v2/repositories/ \
+              -H 'Content-Type: application/json' \
+              -H "Authorization: JWT ${jwt}" \
+              -d "{\"namespace\":\"${ns}\",\"name\":\"${repo}\",\"description\":\"Domain Scanner\",\"is_private\":false}"
+            echo "Created ${IMAGE_NAME}"
+          else
+            echo "Repository ${IMAGE_NAME} already exists (HTTP ${code})"
+          fi
+
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v6
