@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Domain Scanner</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <h1>Domain Scanner</h1>
+          <span class="subtitle">Go Web Console</span>
+        </div>
+        <div class="topbar-actions">
+          <label class="history-picker">
+            <span>历史任务</span>
+            <select id="historySelect" disabled aria-label="历史任务">
+              <option value="">暂无历史任务</option>
+            </select>
+          </label>
+          <button id="loadOptionsButton" type="button" title="将所选任务参数载入表单" disabled>载入参数</button>
+          <button id="themeToggle" type="button" class="icon-button" title="切换深色模式" aria-label="切换深色模式">🌙</button>
+          <span id="statusBadge" class="status-badge idle">空闲</span>
+        </div>
+      </header>
+
+      <main class="layout">
+        <aside class="control-panel">
+          <form id="scanForm" class="form-grid">
+            <div class="section-heading">扫描参数</div>
+
+            <label class="field">
+              <span>后缀</span>
+              <input id="suffix" name="suffix" type="text" value=".li" autocomplete="off" />
+            </label>
+
+            <label class="field">
+              <span>长度</span>
+              <input id="length" name="length" type="number" value="3" min="1" max="8" />
+            </label>
+
+            <fieldset class="field field-full">
+              <legend>模式</legend>
+              <div class="segmented">
+                <label>
+                  <input type="radio" name="pattern" value="D" checked />
+                  <span>字母</span>
+                </label>
+                <label>
+                  <input type="radio" name="pattern" value="d" />
+                  <span>数字</span>
+                </label>
+                <label>
+                  <input type="radio" name="pattern" value="a" />
+                  <span>混合</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <label class="field field-full">
+              <span>正则过滤</span>
+              <input id="regexFilter" name="regexFilter" type="text" autocomplete="off" placeholder="例如 ^abc 或 ^(.)\1{2}$" />
+            </label>
+
+            <label class="toggle field-full">
+              <input id="useDictionary" type="checkbox" />
+              <span>字典模式</span>
+            </label>
+
+            <div class="field field-full dictionary-wrap">
+              <div class="field-head">
+                <span>字典（每行一个词）</span>
+                <label class="file-button">
+                  <input id="dictionaryFile" type="file" accept=".txt,.list,.words,.dict,.csv,text/plain" />
+                  上传文件
+                </label>
+              </div>
+              <textarea id="dictionary" name="dictionary" rows="7" spellcheck="false" placeholder="例如：&#10;apple&#10;orange&#10;banana" disabled></textarea>
+            </div>
+
+            <div class="range-field field-full">
+              <div class="range-label">
+                <span>Worker</span>
+                <input id="workersNumber" type="number" value="10" min="1" max="100" />
+              </div>
+              <input id="workers" type="range" value="10" min="1" max="100" />
+            </div>
+
+            <div class="range-field field-full">
+              <div class="range-label">
+                <span>延迟 ms</span>
+                <input id="delayNumber" type="number" value="1000" min="0" max="60000" step="100" />
+              </div>
+              <input id="delayMs" type="range" value="1000" min="0" max="60000" step="100" />
+            </div>
+
+            <label class="toggle field-full">
+              <input id="showRegistered" type="checkbox" />
+              <span>记录已注册</span>
+            </label>
+
+            <label class="toggle field-full">
+              <input id="force" type="checkbox" />
+              <span>允许大扫描</span>
+            </label>
+
+            <div class="estimate field-full">
+              <span>预计</span>
+              <strong id="estimateCount">17,576</strong>
+            </div>
+
+            <div class="actions field-full">
+              <button id="startButton" class="primary" type="submit">开始扫描</button>
+              <button id="cancelButton" type="button" disabled>取消</button>
+            </div>
+          </form>
+        </aside>
+
+        <section class="workbench">
+          <section class="progress-panel">
+            <div class="progress-head">
+              <div>
+                <span class="label">任务</span>
+                <strong id="scanId">未启动</strong>
+              </div>
+              <div>
+                <span class="label">已用时间</span>
+                <strong id="elapsed">--</strong>
+              </div>
+              <div>
+                <span class="label">ETA</span>
+                <strong id="eta">--</strong>
+              </div>
+            </div>
+
+            <div class="progress-row">
+              <div class="progress-track" aria-label="扫描进度">
+                <div id="progressBar" class="progress-bar"></div>
+              </div>
+              <strong id="progressPercent" class="progress-percent">0%</strong>
+            </div>
+
+            <div class="progress-meta">
+              <span>开始 <strong id="startTime">--</strong></span>
+              <span>结束 <strong id="endTime">--</strong></span>
+            </div>
+
+            <div class="metrics">
+              <div>
+                <span>总数</span>
+                <strong id="totalCount">0</strong>
+              </div>
+              <div>
+                <span>已检查</span>
+                <strong id="processedCount">0</strong>
+              </div>
+              <div>
+                <span>可用</span>
+                <strong id="availableCount">0</strong>
+              </div>
+              <div>
+                <span>已注册</span>
+                <strong id="registeredCount">0</strong>
+              </div>
+              <div>
+                <span>错误</span>
+                <strong id="errorCount">0</strong>
+              </div>
+              <div>
+                <span>QPS</span>
+                <strong id="qps">0.0</strong>
+              </div>
+              <div>
+                <span>活跃</span>
+                <strong id="activeWorkers">0</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="results-panel">
+            <div class="results-toolbar">
+              <div class="tabs" role="tablist" aria-label="结果分类">
+                <button type="button" class="tab active" data-tab="available">可用 <em class="tab-count" data-tab="available">0</em></button>
+                <button type="button" class="tab" data-tab="registered">已注册 <em class="tab-count" data-tab="registered">0</em></button>
+                <button type="button" class="tab" data-tab="errors">错误 <em class="tab-count" data-tab="errors">0</em></button>
+              </div>
+              <div class="results-actions">
+                <input id="filterInput" type="search" placeholder="过滤当前列表…" autocomplete="off" />
+                <div class="table-actions">
+                  <button id="copyButton" type="button" disabled>复制</button>
+                  <button id="downloadButton" type="button" disabled>导出 CSV</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="message" class="message" aria-live="polite"></div>
+
+            <div class="table-wrap">
+              <table>
+                <thead id="resultsHead"></thead>
+                <tbody id="resultsBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

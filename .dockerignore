@@ -1,0 +1,28 @@
+# VCS
+.git
+.gitignore
+
+# Docs & assets not needed at build time
+*.md
+docs
+imgs
+.github
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+LICENSE
+
+# Build artifacts & output
+*.exe
+*.out
+domain-scanner
+main
+available_domains_*
+registered_domains_*
+
+# Local config
+.env
+.env.local
+.vscode
+.idea
+*.swp
+.DS_Store
