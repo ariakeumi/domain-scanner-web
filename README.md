@@ -174,6 +174,33 @@ Build locally:
 docker build -t domain-scanner .
 ```
 
+### Web UI: multi-task & global concurrency limits
+
+The web UI can run multiple scans at once:
+
+- **Task list**: all scans (running / queued / finished) are listed, each with
+  its own progress, stats, and results. Click a task to view it; running tasks
+  can be cancelled individually.
+- **Queuing**: when the number of concurrently running scans reaches the cap,
+  newly submitted scans wait in a queue (status “queued”) and start
+  automatically as soon as a slot frees up.
+- **Global worker cap**: a shared cap on the total number of concurrent domain
+  checks across all scans, preventing too many parallel WHOIS/DNS requests when
+  several scans run at the same time.
+
+Configure via environment variables (web mode):
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MAX_CONCURRENT_SCANS` | `3` | Max concurrently running scans (1–20); extra scans queue |
+| `MAX_TOTAL_WORKERS` | `100` | Max total workers across all scans (1–1000) |
+
+Example:
+
+```bash
+MAX_CONCURRENT_SCANS=2 MAX_TOTAL_WORKERS=50 go run main.go -web
+```
+
 ### Automatic builds on GitHub
 
 A CI workflow (`.github/workflows/docker.yml`) builds and pushes multi-arch

@@ -161,6 +161,30 @@ PORT=9000 docker compose up -d
 docker build -t domain-scanner .
 ```
 
+### Web 界面：多任务与全局并发限制
+
+Web 界面支持同时运行多个扫描任务：
+
+- **多任务列表**：所有任务（运行中 / 排队中 / 已完成）会显示在任务列表中，
+  每个任务都有独立的进度、统计和结果，点击即可切换查看，运行中的任务可单独取消。
+- **任务排队**：当同时运行的任务数达到上限时，新提交的任务会进入队列
+  （状态显示为“排队中”），有空闲并发位后自动开始。
+- **全局 Worker 上限**：所有任务共享的并发检查数上限，防止多个任务叠加时
+  产生过多并发 WHOIS/DNS 请求。
+
+通过环境变量配置（Web 模式生效）：
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `MAX_CONCURRENT_SCANS` | `3` | 同时运行的扫描任务数上限（1–20），超出部分排队 |
+| `MAX_TOTAL_WORKERS` | `100` | 所有任务合计的并发 Worker 上限（1–1000） |
+
+示例：
+
+```bash
+MAX_CONCURRENT_SCANS=2 MAX_TOTAL_WORKERS=50 go run main.go -web
+```
+
 ### 在 GitHub 上自动构建
 
 CI 工作流（`.github/workflows/docker.yml`）会在推送到默认分支或 `v*` 标签时，

@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 )
 
 const (
+	StatusQueued    = "queued"
 	StatusRunning   = "running"
 	StatusCanceling = "canceling"
 	StatusCanceled  = "canceled"
@@ -87,12 +89,34 @@ type Snapshot struct {
 	Errors              []Result   `json:"errors"`
 }
 
+// Config describes global concurrency limits and current load.
+type Config struct {
+	MaxConcurrentScans int `json:"maxConcurrentScans"`
+	MaxTotalWorkers    int `json:"maxTotalWorkers"`
+	Running            int `json:"running"`
+	Queued             int `json:"queued"`
+}
+
+// pendingScan is a scan waiting for a free global scan slot.
+type pendingScan struct {
+	scan      *Scan
+	ctx       context.Context
+	domainGen *generator.DomainGenerator
+}
+
 // Manager tracks scan jobs, optionally persisting finished scans to disk.
+// It applies a global cap on concurrently running scans (queued jobs wait for a
+// free slot) and a global cap on total active workers across all scans.
 type Manager struct {
-	mu    sync.RWMutex
-	scans map[string]*Scan
-	seq   uint64
-	store *Store
+	mu                 sync.RWMutex
+	scans              map[string]*Scan
+	seq                uint64
+	store              *Store
+	maxConcurrentScans int
+	maxTotalWorkers    int
+	scanSlots          chan struct{}
+	workerSlots        chan struct{}
+	pending            chan pendingScan
 }
 
 // Scan is a running or finished scan job.
@@ -108,6 +132,7 @@ type Scan struct {
 	startedAt    time.Time
 	endedAt      *time.Time
 	resultLimit  int
+	workerSlots  chan struct{}
 
 	registeredCount int64
 	errorCount      int64
@@ -123,14 +148,91 @@ func NewManager(dataDir string) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	maxScans := envInt("MAX_CONCURRENT_SCANS", 3)
+	if maxScans < 1 {
+		maxScans = 1
+	}
+	if maxScans > 20 {
+		maxScans = 20
+	}
+	maxTotalWorkers := envInt("MAX_TOTAL_WORKERS", 100)
+	if maxTotalWorkers < 1 {
+		maxTotalWorkers = 1
+	}
+	if maxTotalWorkers > 1000 {
+		maxTotalWorkers = 1000
+	}
+
 	m := &Manager{
-		scans: make(map[string]*Scan),
-		store: store,
+		scans:              make(map[string]*Scan),
+		store:              store,
+		maxConcurrentScans: maxScans,
+		maxTotalWorkers:    maxTotalWorkers,
+		scanSlots:          make(chan struct{}, maxScans),
+		workerSlots:        make(chan struct{}, maxTotalWorkers),
+		pending:            make(chan pendingScan, 256),
 	}
 	if store != nil {
 		m.seq = m.maxSeqForDate(time.Now().Format("20060102"))
 	}
+	go m.dispatcher()
 	return m, nil
+}
+
+// envInt reads an integer environment variable, falling back to def.
+func envInt(name string, def int) int {
+	v := os.Getenv(name)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return def
+	}
+	return n
+}
+
+// dispatcher starts queued scans as global scan slots free up.
+func (m *Manager) dispatcher() {
+	for item := range m.pending {
+		select {
+		case m.scanSlots <- struct{}{}:
+		case <-item.ctx.Done():
+			m.finishQueued(item)
+			continue
+		}
+
+		item.scan.mu.Lock()
+		if item.scan.status != StatusQueued {
+			// Canceled while queued (or otherwise no longer queued).
+			item.scan.mu.Unlock()
+			<-m.scanSlots
+			m.finishQueued(item)
+			continue
+		}
+		item.scan.status = StatusRunning
+		item.scan.startedAt = time.Now()
+		item.scan.mu.Unlock()
+
+		go func(it pendingScan) {
+			defer func() { <-m.scanSlots }()
+			it.scan.run(it.ctx, it.domainGen)
+			m.persist(it.scan)
+		}(item)
+	}
+}
+
+// finishQueued persists a queued scan that never ran (e.g. canceled while queued).
+func (m *Manager) finishQueued(item pendingScan) {
+	item.scan.mu.Lock()
+	if item.scan.status == StatusQueued {
+		item.scan.status = StatusCanceled
+		now := time.Now()
+		item.scan.endedAt = &now
+	}
+	item.scan.mu.Unlock()
+	m.persist(item.scan)
 }
 
 // Start validates options and starts a new scan.
@@ -160,12 +262,13 @@ func (m *Manager) Start(options Options) (*Scan, error) {
 	scan := &Scan{
 		id:          id,
 		options:     options,
-		status:      StatusRunning,
+		status:      StatusQueued,
 		cancel:      cancel,
 		collector:   stats.NewCollector(int64(domainGen.TotalCount), options.Workers),
 		generated:   domainGen.Generated,
 		startedAt:   time.Now(),
 		resultLimit: options.ResultLimit,
+		workerSlots: m.workerSlots,
 		available:   make([]Result, 0),
 		registered:  make([]Result, 0),
 		errors:      make([]Result, 0),
@@ -175,10 +278,20 @@ func (m *Manager) Start(options Options) (*Scan, error) {
 	m.scans[id] = scan
 	m.mu.Unlock()
 
-	go func() {
-		scan.run(ctx, domainGen)
-		m.persist(scan)
-	}()
+	// Start immediately if a global scan slot is free, otherwise queue.
+	select {
+	case m.scanSlots <- struct{}{}:
+		scan.mu.Lock()
+		scan.status = StatusRunning
+		scan.mu.Unlock()
+		go func() {
+			defer func() { <-m.scanSlots }()
+			scan.run(ctx, domainGen)
+			m.persist(scan)
+		}()
+	default:
+		m.pending <- pendingScan{scan: scan, ctx: ctx, domainGen: domainGen}
+	}
 
 	return scan, nil
 }
@@ -243,6 +356,39 @@ func (m *Manager) List() []Snapshot {
 	return list
 }
 
+// ListSummary returns scan snapshots without result payloads, for cheap
+// list rendering in the web UI.
+func (m *Manager) ListSummary() []Snapshot {
+	snapshots := m.List()
+	for i := range snapshots {
+		snapshots[i].Available = nil
+		snapshots[i].Registered = nil
+		snapshots[i].Errors = nil
+	}
+	return snapshots
+}
+
+// Config returns global concurrency limits and current load.
+func (m *Manager) Config() Config {
+	m.mu.RLock()
+	var running, queued int
+	for _, s := range m.scans {
+		switch s.Status() {
+		case StatusRunning, StatusCanceling:
+			running++
+		case StatusQueued:
+			queued++
+		}
+	}
+	m.mu.RUnlock()
+	return Config{
+		MaxConcurrentScans: m.maxConcurrentScans,
+		MaxTotalWorkers:    m.maxTotalWorkers,
+		Running:            running,
+		Queued:             queued,
+	}
+}
+
 func (m *Manager) nextID() string {
 	seq := atomic.AddUint64(&m.seq, 1)
 	return fmt.Sprintf("%s-%04d", time.Now().Format("20060102"), seq)
@@ -290,7 +436,7 @@ func (s *Scan) run(ctx context.Context, domainGen *generator.DomainGenerator) {
 		workerWg.Add(1)
 		go func(id int) {
 			defer workerWg.Done()
-			worker.WorkerWithContext(ctx, id, jobs, results, time.Duration(s.options.DelayMS)*time.Millisecond, s.collector)
+			worker.WorkerWithContext(ctx, id, jobs, results, time.Duration(s.options.DelayMS)*time.Millisecond, s.collector, s.workerSlots)
 		}(w)
 	}
 
@@ -321,12 +467,27 @@ func (s *Scan) run(ctx context.Context, domainGen *generator.DomainGenerator) {
 func (s *Scan) Cancel() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.status != StatusRunning {
+	switch s.status {
+	case StatusRunning:
+		s.status = StatusCanceling
+		s.cancel()
+		return true
+	case StatusQueued:
+		s.status = StatusCanceled
+		now := time.Now()
+		s.endedAt = &now
+		s.cancel()
+		return true
+	default:
 		return false
 	}
-	s.status = StatusCanceling
-	s.cancel()
-	return true
+}
+
+// Status returns the scan's current status.
+func (s *Scan) Status() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.status
 }
 
 // Snapshot returns a JSON-safe copy of the scan state.
@@ -356,7 +517,9 @@ func (s *Scan) Snapshot() Snapshot {
 	etaSeconds := int64(s.collector.CalculateETA().Seconds())
 	if status == StatusCompleted || status == StatusCanceled || status == StatusFailed {
 		etaSeconds = 0
-		if processed > 0 || s.collector.GetTotalDomains() > 0 {
+		// Only report 100% for terminal scans that actually did work; a scan
+		// canceled while queued never ran and should stay at 0%.
+		if processed > 0 {
 			progress = 100
 		}
 	}

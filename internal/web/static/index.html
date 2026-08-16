@@ -11,16 +11,11 @@
       <header class="topbar">
         <div class="brand">
           <h1>Domain Scanner</h1>
-          <span class="subtitle">Go Web Console</span>
+          <span class="subtitle">Go Web Console · 多任务</span>
         </div>
         <div class="topbar-actions">
-          <label class="history-picker">
-            <span>历史任务</span>
-            <select id="historySelect" disabled aria-label="历史任务">
-              <option value="">暂无历史任务</option>
-            </select>
-          </label>
-          <button id="loadOptionsButton" type="button" title="将所选任务参数载入表单" disabled>载入参数</button>
+          <span id="globalStats" class="global-stats" title="全局并发限制：同时运行的扫描数上限 / 全局 Worker 数上限">运行中 0/3 · 排队 0</span>
+          <button id="refreshButton" type="button" title="刷新任务列表">刷新</button>
           <button id="themeToggle" type="button" class="icon-button" title="切换深色模式" aria-label="切换深色模式">🌙</button>
           <span id="statusBadge" class="status-badge idle">空闲</span>
         </div>
@@ -113,17 +108,29 @@
 
             <div class="actions field-full">
               <button id="startButton" class="primary" type="submit">开始扫描</button>
-              <button id="cancelButton" type="button" disabled>取消</button>
             </div>
           </form>
         </aside>
 
         <section class="workbench">
+          <section class="task-panel panel">
+            <div class="task-panel-head">
+              <div>
+                <span class="panel-title">任务列表</span>
+                <span id="taskCount" class="task-count muted"></span>
+              </div>
+              <span class="task-hint muted">点击任务查看详情 · 运行中任务可单独取消</span>
+            </div>
+            <div id="taskList" class="task-list">
+              <div class="task-empty">暂无任务</div>
+            </div>
+          </section>
+
           <section class="progress-panel">
             <div class="progress-head">
               <div>
-                <span class="label">任务</span>
-                <strong id="scanId">未启动</strong>
+                <span class="label">当前任务</span>
+                <strong id="scanId">未选择</strong>
               </div>
               <div>
                 <span class="label">已用时间</span>
@@ -132,6 +139,10 @@
               <div>
                 <span class="label">ETA</span>
                 <strong id="eta">--</strong>
+              </div>
+              <div class="progress-head-actions">
+                <button id="loadOptionsButton" type="button" title="将当前任务参数载入表单">载入参数</button>
+                <button id="cancelButton" type="button" disabled>取消</button>
               </div>
             </div>
 

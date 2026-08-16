@@ -18,7 +18,12 @@
     estimate: document.querySelector(".estimate"),
     startButton: document.getElementById("startButton"),
     cancelButton: document.getElementById("cancelButton"),
+    loadOptionsButton: document.getElementById("loadOptionsButton"),
     statusBadge: document.getElementById("statusBadge"),
+    globalStats: document.getElementById("globalStats"),
+    refreshButton: document.getElementById("refreshButton"),
+    taskCount: document.getElementById("taskCount"),
+    taskList: document.getElementById("taskList"),
     scanId: document.getElementById("scanId"),
     elapsed: document.getElementById("elapsed"),
     eta: document.getElementById("eta"),
@@ -40,21 +45,21 @@
     copyButton: document.getElementById("copyButton"),
     downloadButton: document.getElementById("downloadButton"),
     filterInput: document.getElementById("filterInput"),
-    historySelect: document.getElementById("historySelect"),
-    loadOptionsButton: document.getElementById("loadOptionsButton"),
     themeToggle: document.getElementById("themeToggle"),
   };
 
   const state = {
     activeTab: "available",
     snapshot: null,
+    tasks: [],
+    config: { maxConcurrentScans: 3, maxTotalWorkers: 100, running: 0, queued: 0 },
     scanId: "",
-    pollTimer: 0,
+    detailTimer: 0,
+    listTimer: 0,
     starting: false,
-    lastPollSignature: "", 
+    lastPollSignature: "",
     filter: "",
     sort: { key: "domain", dir: 1 },
-    history: [],
     lastCounts: { available: 0, registered: 0, errors: 0 },
     highlight: new Set(),
     highlightTimer: 0,
@@ -75,7 +80,11 @@
     els.dictionaryFile.addEventListener("change", loadDictionaryFile);
 
     els.form.addEventListener("submit", startScan);
-    els.cancelButton.addEventListener("click", cancelScan);
+    els.cancelButton.addEventListener("click", () => {
+      if (state.scanId) cancelTask(state.scanId);
+    });
+    els.loadOptionsButton.addEventListener("click", () => loadOptionsFromSnapshot(state.snapshot));
+    els.refreshButton.addEventListener("click", refreshAll);
     els.copyButton.addEventListener("click", copyCurrentRows);
     els.downloadButton.addEventListener("click", downloadCurrentRows);
     els.filterInput.addEventListener("input", () => {
@@ -84,8 +93,7 @@
     });
     els.resultsHead.addEventListener("click", onSortClick);
     els.resultsBody.addEventListener("click", onResultClick);
-    els.historySelect.addEventListener("change", onHistoryChange);
-    els.loadOptionsButton.addEventListener("click", loadSelectedOptions);
+    els.taskList.addEventListener("click", onTaskListClick);
     els.themeToggle.addEventListener("click", toggleTheme);
 
     els.tabs.forEach((tab) => {
@@ -100,15 +108,13 @@
     updateDictionaryMode();
     updateEstimate();
 
-    await loadHistory();
-    if (state.history.length > 0) {
-      const latest = state.history[0];
-      state.scanId = latest.id;
-      renderSnapshot(latest);
-      if (isActive(latest.status)) {
-        startPolling();
-      }
+    await refreshAll();
+    if (state.tasks.length > 0) {
+      const active = state.tasks.find((task) => isActive(task.status));
+      const target = active || state.tasks[0];
+      await selectTask(target.id);
     }
+    startListPolling();
   }
 
   function bindRange(range, number) {
@@ -149,125 +155,6 @@
     return Math.pow(size, length);
   }
 
-  async function loadHistory() {
-    try {
-      const scans = await requestJSON("/api/scans");
-      state.history = Array.isArray(scans) ? scans : [];
-    } catch (error) {
-      state.history = [];
-    }
-    renderHistorySelect();
-    return state.history;
-  }
-
-  function renderHistorySelect() {
-    const select = els.historySelect;
-    select.innerHTML = "";
-    if (state.history.length === 0) {
-      select.innerHTML = '<option value="">暂无历史任务</option>';
-      select.disabled = true;
-      els.loadOptionsButton.disabled = true;
-      return;
-    }
-    select.disabled = false;
-    for (const scan of state.history) {
-      const option = document.createElement("option");
-      option.value = scan.id;
-      option.textContent = `${scan.id} · ${statusLabel(scan.status)} · 共 ${formatNumber(scan.total)}`;
-      if (scan.id === state.scanId) {
-        option.selected = true;
-      }
-      select.appendChild(option);
-    }
-    els.loadOptionsButton.disabled = !state.scanId;
-  }
-
-  function syncHistorySnapshot(snapshot) {
-    const index = state.history.findIndex((scan) => scan.id === snapshot.id);
-    const previousStatus = index >= 0 ? state.history[index].status : null;
-    if (index >= 0) {
-      state.history[index] = snapshot;
-    } else {
-      state.history.unshift(snapshot);
-    }
-    if (previousStatus !== snapshot.status) {
-      renderHistorySelect();
-    }
-  }
-
-  async function onHistoryChange() {
-    const id = els.historySelect.value;
-    if (!id) {
-      return;
-    }
-    await selectScan(id);
-  }
-
-  async function selectScan(id) {
-    stopPolling();
-    state.scanId = id;
-    els.loadOptionsButton.disabled = false;
-
-    const cached = state.history.find((scan) => scan.id === id);
-    if (cached) {
-      renderSnapshot(cached);
-      if (isActive(cached.status)) {
-        startPolling();
-      }
-      renderHistorySelect();
-      return;
-    }
-
-    try {
-      const snapshot = await requestJSON(`/api/scans/${encodeURIComponent(id)}`);
-      renderSnapshot(snapshot);
-      if (isActive(snapshot.status)) {
-        startPolling();
-      }
-    } catch (error) {
-      setMessage(error.message, "error");
-    }
-  }
-
-  function loadSelectedOptions() {
-    const snapshot = state.history.find((scan) => scan.id === state.scanId);
-    if (!snapshot) {
-      return;
-    }
-    fillFormFromSnapshot(snapshot);
-    setMessage("已载入任务参数", "ok");
-  }
-
-  function fillFormFromSnapshot(snapshot) {
-    const options = snapshot.options || {};
-    els.suffix.value = options.suffix || ".li";
-    els.length.value = options.length || 3;
-
-    const pattern = options.pattern || "D";
-    document.querySelectorAll('input[name="pattern"]').forEach((input) => {
-      input.checked = input.value === pattern;
-    });
-
-    els.regexFilter.value = options.regexFilter || "";
-    const words = (options.dictWords || []).join("\n");
-    els.useDictionary.checked = words.length > 0;
-    els.dictionary.value = words;
-
-    const workers = options.workers || 10;
-    els.workers.value = String(workers);
-    els.workersNumber.value = String(workers);
-
-    const delay = options.delayMs != null ? options.delayMs : 1000;
-    els.delayMs.value = String(delay);
-    els.delayNumber.value = String(delay);
-
-    els.showRegistered.checked = !!options.showRegistered;
-    els.force.checked = !!options.force;
-
-    updateDictionaryMode();
-    updateEstimate();
-  }
-
   async function loadDictionaryFile() {
     const file = els.dictionaryFile.files && els.dictionaryFile.files[0];
     if (!file) {
@@ -287,16 +174,220 @@
     }
   }
 
+  // ---------- Task list ----------
+
+  async function refreshAll() {
+    const [tasks, config] = await Promise.all([fetchList(), fetchConfig()]);
+    state.tasks = tasks;
+    state.config = config;
+    renderTaskList();
+    updateGlobalStats();
+    updateStatusBadge();
+  }
+
+  async function fetchList() {
+    const tasks = await requestJSON("/api/scans?summary=1");
+    return Array.isArray(tasks) ? tasks : [];
+  }
+
+  async function fetchConfig() {
+    try {
+      return await requestJSON("/api/config");
+    } catch (error) {
+      return { maxConcurrentScans: 3, maxTotalWorkers: 100, running: 0, queued: 0 };
+    }
+  }
+
+  function onTaskListClick(event) {
+    const row = event.target.closest(".task-row");
+    if (!row) {
+      return;
+    }
+    const id = row.dataset.id;
+    const actionEl = event.target.closest("[data-action]");
+    const action = actionEl ? actionEl.dataset.action : "select";
+    if (action === "cancel") {
+      cancelTask(id);
+      return;
+    }
+    if (action === "load") {
+      const task = state.tasks.find((item) => item.id === id);
+      loadOptionsFromSnapshot(task);
+      return;
+    }
+    selectTask(id);
+  }
+
+  async function selectTask(id) {
+    state.scanId = id;
+    state.lastPollSignature = "";
+    state.lastCounts = { available: 0, registered: 0, errors: 0 };
+    renderTaskList();
+    try {
+      const snapshot = await requestJSON(`/api/scans/${encodeURIComponent(id)}`);
+      renderSnapshot(snapshot);
+      if (!isTerminal(snapshot.status)) {
+        startDetailPolling();
+      }
+    } catch (error) {
+      setMessage(error.message, "error");
+    }
+  }
+
+  async function cancelTask(id) {
+    try {
+      const snapshot = await requestJSON(`/api/scans/${encodeURIComponent(id)}/cancel`, {
+        method: "POST",
+      });
+      if (id === state.scanId) {
+        renderSnapshot(snapshot);
+      }
+      setMessage("已发送取消请求", "ok");
+      await refreshAll();
+    } catch (error) {
+      setMessage(error.message, "error");
+    }
+  }
+
+  function renderTaskList() {
+    const tasks = state.tasks;
+    els.taskCount.textContent = tasks.length ? `共 ${tasks.length} 个` : "";
+    if (tasks.length === 0) {
+      els.taskList.innerHTML = '<div class="task-empty">暂无任务</div>';
+      return;
+    }
+    els.taskList.innerHTML = tasks.map(taskRowHTML).join("");
+  }
+
+  function taskRowHTML(task) {
+    const selected = task.id === state.scanId;
+    const progress = clamp(Number(task.progress || 0), 0, 100).toFixed(1);
+    const active = isActive(task.status);
+    const queued = task.status === "queued";
+    return `
+      <div class="task-row${selected ? " selected" : ""}" data-id="${escapeHTML(task.id)}">
+        <div class="task-row-main" data-action="select" title="点击查看详情">
+          <div class="task-row-head">
+            <span class="task-id">${escapeHTML(task.id)}</span>
+            <span class="status-badge ${escapeHTML(task.status)}">${escapeHTML(statusLabel(task.status))}</span>
+            <span class="task-options">${escapeHTML(optionsSummary(task.options))}</span>
+          </div>
+          <div class="progress-row">
+            <div class="progress-track"><div class="progress-bar" style="width:${progress}%"></div></div>
+            <strong class="progress-percent">${progress}%</strong>
+          </div>
+          <div class="task-meta">
+            <span>总数 ${formatCompact(task.total)}</span>
+            <span>已检查 ${formatCompact(task.processed)}</span>
+            <span>可用 ${formatCompact(task.availableCount)}</span>
+            <span>已注册 ${formatCompact(task.registeredCount)}</span>
+            <span>错误 ${formatCompact(task.errorCount)}</span>
+            <span>QPS ${Number(task.qps || 0).toFixed(1)}</span>
+            <span>用时 ${queued ? "-" : formatDuration(task.elapsedSeconds)}</span>
+            <span>ETA ${task.etaSeconds > 0 ? formatDuration(task.etaSeconds) : "--"}</span>
+          </div>
+        </div>
+        <div class="task-row-actions">
+          <button type="button" data-action="load" title="将参数载入表单">载入参数</button>
+          <button type="button" data-action="cancel" ${active ? "" : "disabled"} title="取消任务">取消</button>
+        </div>
+      </div>`;
+  }
+
+  function optionsSummary(options) {
+    if (!options) {
+      return "";
+    }
+    const parts = [];
+    parts.push(`后缀 ${options.suffix || ".li"}`);
+    const patternLabel = { d: "数字", D: "字母", a: "混合" }[options.pattern] || options.pattern;
+    if (options.dictWords && options.dictWords.length > 0) {
+      parts.push(`字典 ${options.dictWords.length} 词`);
+    } else {
+      parts.push(`${patternLabel}${options.length}位`);
+    }
+    if (options.regexFilter) {
+      parts.push(`正则 ${options.regexFilter}`);
+    }
+    parts.push(`Worker ${options.workers}`);
+    if (options.delayMs > 0) {
+      parts.push(`延迟 ${options.delayMs}ms`);
+    }
+    return parts.join(" · ");
+  }
+
+  function updateGlobalStats() {
+    const config = state.config || {};
+    const running = config.running != null ? config.running : state.tasks.filter((t) => isActive(t.status)).length;
+    const queued = config.queued != null ? config.queued : state.tasks.filter((t) => t.status === "queued").length;
+    els.globalStats.textContent = `运行中 ${running}/${config.maxConcurrentScans || "-"} · 排队 ${queued} · Worker上限 ${config.maxTotalWorkers || "-"}`;
+  }
+
+  function updateStatusBadge() {
+    if (state.tasks.some((task) => isActive(task.status))) {
+      setStatus("running", "扫描中");
+    } else if (state.tasks.some((task) => task.status === "queued")) {
+      setStatus("queued", "排队中");
+    } else {
+      setStatus("idle", "空闲");
+    }
+  }
+
+  // ---------- Polling ----------
+
+  function startDetailPolling() {
+    stopDetailPolling();
+    pollDetail();
+    state.detailTimer = window.setInterval(pollDetail, 1000);
+  }
+
+  function stopDetailPolling() {
+    if (state.detailTimer) {
+      window.clearInterval(state.detailTimer);
+      state.detailTimer = 0;
+    }
+  }
+
+  async function pollDetail() {
+    if (!state.scanId) {
+      return;
+    }
+    try {
+      const snapshot = await requestJSON(`/api/scans/${encodeURIComponent(state.scanId)}`);
+      renderSnapshot(snapshot);
+      if (isTerminal(snapshot.status)) {
+        stopDetailPolling();
+      }
+    } catch (error) {
+      stopDetailPolling();
+      setMessage(error.message, "error");
+    }
+  }
+
+  function startListPolling() {
+    stopListPolling();
+    state.listTimer = window.setInterval(() => {
+      refreshAll().catch(() => {});
+    }, 2000);
+  }
+
+  function stopListPolling() {
+    if (state.listTimer) {
+      window.clearInterval(state.listTimer);
+      state.listTimer = 0;
+    }
+  }
+
+  // ---------- Scan lifecycle ----------
+
   async function startScan(event) {
     event.preventDefault();
     if (state.starting) {
       return;
     }
-
-    stopPolling();
     state.starting = true;
     setMessage("", "");
-    setControlsRunning(true);
+    els.startButton.disabled = true;
 
     try {
       const payload = buildPayload();
@@ -307,77 +398,19 @@
       });
       state.scanId = snapshot.id;
       state.lastPollSignature = "";
+      state.lastCounts = { available: 0, registered: 0, errors: 0 };
       renderSnapshot(snapshot);
-      startPolling();
-      setMessage("扫描已启动", "ok");
-      await loadHistory();
+      if (!isTerminal(snapshot.status)) {
+        startDetailPolling();
+      }
+      setMessage(snapshot.status === "queued" ? "已加入队列，等待空闲并发位" : "扫描已启动", "ok");
+      await refreshAll();
     } catch (error) {
-      setStatus("failed", "错误");
+      setStatus("idle", "空闲");
       setMessage(error.message, "error");
     } finally {
       state.starting = false;
-      setControlsRunning(isActive(state.snapshot?.status));
-    }
-  }
-
-  async function cancelScan() {
-    if (!state.scanId) {
-      return;
-    }
-
-    els.cancelButton.disabled = true;
-    try {
-      const snapshot = await requestJSON(`/api/scans/${encodeURIComponent(state.scanId)}/cancel`, {
-        method: "POST",
-      });
-      renderSnapshot(snapshot);
-      setMessage("正在取消", "ok");
-    } catch (error) {
-      setMessage(error.message, "error");
-      els.cancelButton.disabled = false;
-    }
-  }
-
-  function startPolling() {
-    stopPolling();
-    pollScan();
-    state.pollTimer = window.setInterval(pollScan, 1000);
-  }
-
-  function stopPolling() {
-    if (state.pollTimer) {
-      window.clearInterval(state.pollTimer);
-      state.pollTimer = 0;
-    }
-  }
-
-  async function pollScan() {
-    if (!state.scanId) {
-      return;
-    }
-
-    try {
-      const snapshot = await requestJSON(`/api/scans/${encodeURIComponent(state.scanId)}`);
-      const signature = `${snapshot.status}|${snapshot.processed}|${snapshot.availableCount}|${snapshot.registeredCount}|${snapshot.errorCount}`;
-      const rowsChanged = signature !== state.lastPollSignature;
-      state.lastPollSignature = signature;
-
-      if (rowsChanged) {
-        renderSnapshot(snapshot);
-      } else {
-        // Nothing new to render; just keep elapsed/ETA fresh without rebuilding the table.
-        els.elapsed.textContent = snapshot.elapsedSeconds != null ? formatDuration(snapshot.elapsedSeconds) : "--";
-        els.eta.textContent = snapshot.etaSeconds > 0 ? formatDuration(snapshot.etaSeconds) : "--";
-        setControlsRunning(isActive(snapshot.status));
-      }
-
-      if (!isActive(snapshot.status)) {
-        stopPolling();
-      }
-    } catch (error) {
-      stopPolling();
-      setMessage(error.message, "error");
-      setControlsRunning(false);
+      els.startButton.disabled = false;
     }
   }
 
@@ -401,12 +434,12 @@
     state.snapshot = snapshot;
     state.scanId = snapshot.id;
     els.loadOptionsButton.disabled = false;
-    syncHistorySnapshot(snapshot);
+    renderTaskList();
+    updateStatusBadge();
 
-    setStatus(snapshot.status, statusLabel(snapshot.status));
-    els.scanId.textContent = snapshot.id || "未启动";
+    els.scanId.textContent = snapshot.id || "未选择";
     els.eta.textContent = snapshot.etaSeconds > 0 ? formatDuration(snapshot.etaSeconds) : "--";
-    els.elapsed.textContent = snapshot.elapsedSeconds != null ? formatDuration(snapshot.elapsedSeconds) : "--";
+    els.elapsed.textContent = snapshot.status === "queued" ? "--" : formatDuration(snapshot.elapsedSeconds);
     els.totalCount.textContent = formatNumber(snapshot.total);
     els.processedCount.textContent = formatNumber(snapshot.processed);
     els.availableCount.textContent = formatNumber(snapshot.availableCount);
@@ -429,6 +462,8 @@
       setMessage(snapshot.error, "error");
     } else if (truncation) {
       setMessage(truncation, "");
+    } else if (snapshot.status === "queued") {
+      setMessage("任务已排队，等待空闲并发位", "");
     } else if (!isActive(snapshot.status)) {
       setMessage(statusLabel(snapshot.status), snapshot.status === "completed" ? "ok" : "");
     }
@@ -486,6 +521,8 @@
       el.textContent = formatCompact(info.count) + (info.truncated ? "+" : "");
     });
   }
+
+  // ---------- Results rendering ----------
 
   function renderResults() {
     const snapshot = state.snapshot;
@@ -704,8 +741,10 @@
   }
 
   function setControlsRunning(running) {
-    els.startButton.disabled = running || state.starting;
-    els.cancelButton.disabled = !running || state.snapshot?.status === "canceling";
+    const selected = state.snapshot && state.snapshot.id === state.scanId;
+    els.cancelButton.disabled = !running || !selected || state.snapshot?.status === "canceling";
+    els.startButton.disabled = state.starting;
+    els.loadOptionsButton.disabled = !state.scanId;
   }
 
   function setStatus(status, label) {
@@ -720,6 +759,8 @@
 
   function statusLabel(status) {
     switch (status) {
+      case "queued":
+        return "排队中";
       case "running":
         return "扫描中";
       case "canceling":
@@ -739,8 +780,46 @@
     return status === "running" || status === "canceling";
   }
 
+  function isTerminal(status) {
+    return status === "completed" || status === "canceled" || status === "failed";
+  }
+
   function getPattern() {
     return document.querySelector('input[name="pattern"]:checked')?.value || "D";
+  }
+
+  function setPattern(value) {
+    const radio = document.querySelector(`input[name="pattern"][value="${value}"]`);
+    if (radio) {
+      radio.checked = true;
+    }
+  }
+
+  function loadOptionsFromSnapshot(snapshot) {
+    if (!snapshot || !snapshot.options) {
+      return;
+    }
+    const options = snapshot.options;
+    els.suffix.value = options.suffix || ".li";
+    if (options.length) {
+      els.length.value = options.length;
+    }
+    if (options.pattern) {
+      setPattern(options.pattern);
+    }
+    els.regexFilter.value = options.regexFilter || "";
+    const useDict = !!(options.dictWords && options.dictWords.length > 0);
+    els.useDictionary.checked = useDict;
+    els.dictionary.value = useDict ? options.dictWords.join("\n") : "";
+    els.workersNumber.value = options.workers || 10;
+    els.workers.value = options.workers || 10;
+    els.delayNumber.value = options.delayMs || 0;
+    els.delayMs.value = options.delayMs || 0;
+    els.showRegistered.checked = !!options.showRegistered;
+    els.force.checked = !!options.force;
+    updateDictionaryMode();
+    updateEstimate();
+    setMessage("已载入参数", "ok");
   }
 
   function splitDictionaryText(text) {

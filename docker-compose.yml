@@ -6,7 +6,9 @@
 #   docker compose logs -f        # follow logs
 #
 # Optional overrides (environment variables):
-#   PORT   host port   (default: 8080, mapped to container port 8080)
+#   PORT                 host port   (default: 8080, mapped to container port 8080)
+#   MAX_CONCURRENT_SCANS max concurrently running scans (default: 3, extra scans queue)
+#   MAX_TOTAL_WORKERS    max total workers across all scans (default: 100)
 
 services:
   domain-scanner:
@@ -15,6 +17,9 @@ services:
     restart: unless-stopped
     ports:
       - "${PORT:-8080}:8080"
+    environment:
+      - MAX_CONCURRENT_SCANS=${MAX_CONCURRENT_SCANS:-3}
+      - MAX_TOTAL_WORKERS=${MAX_TOTAL_WORKERS:-100}
     volumes:
       - scanner-data:/app/data
 

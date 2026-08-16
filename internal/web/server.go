@@ -78,6 +78,7 @@ func ListenAndServe(addr, dataDir string) error {
 // Handler returns the HTTP handler for the web UI and API.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/scans", s.handleScans)
 	mux.HandleFunc("/api/scans/", s.handleScan)
 	mux.Handle("/", s.static)
@@ -87,12 +88,24 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) handleScans(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		if r.URL.Query().Get("summary") == "1" {
+			writeJSON(w, http.StatusOK, s.manager.ListSummary())
+			return
+		}
 		writeJSON(w, http.StatusOK, s.manager.List())
 	case http.MethodPost:
 		s.startScan(w, r)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.manager.Config())
 }
 
 func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
