@@ -42,5 +42,7 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -q -O /dev/null http://127.0.0.1:8080/api/scans || exit 1
 
+# Grace period lets SIGTERM handling cancel in-flight scans and persist their
+# state to /app/data before SIGKILL.
 ENTRYPOINT ["domain-scanner"]
-CMD ["-web", "-addr", "0.0.0.0:8080"]
+CMD ["-web", "-addr", "0.0.0.0:8080", "-data", "/app/data"]

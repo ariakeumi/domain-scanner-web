@@ -472,13 +472,13 @@
   function truncationNotice(snapshot) {
     const parts = [];
     if (snapshot.availableTruncated) {
-      parts.push(`可用结果较多，仅显示前 ${formatNumber(snapshot.resultLimit)} 条`);
+      parts.push(`可用结果较多，仅显示前 ${formatNumber(snapshot.resultLimit)} 条，导出 CSV 包含全部结果`);
     }
     if (snapshot.registeredTruncated) {
-      parts.push(`已注册结果较多，仅显示前 ${formatNumber(snapshot.resultLimit)} 条`);
+      parts.push(`已注册结果较多，仅显示前 ${formatNumber(snapshot.resultLimit)} 条，导出 CSV 包含全部结果`);
     }
     if (snapshot.errorsTruncated) {
-      parts.push(`错误结果较多，仅显示前 ${formatNumber(snapshot.resultLimit)} 条`);
+      parts.push(`错误结果较多，仅显示前 ${formatNumber(snapshot.resultLimit)} 条，导出 CSV 包含全部结果`);
     }
     return parts.join("；");
   }
@@ -674,20 +674,39 @@
     setMessage("已复制", "ok");
   }
 
-  function downloadCurrentRows() {
-    const rows = visibleRows();
-    if (rows.length === 0) {
+  async function downloadCurrentRows() {
+    if (!state.scanId) {
       return;
     }
-    const blob = new Blob([rowsToCSV(rows)], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `domain-scanner-${state.activeTab}-${Date.now()}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    els.downloadButton.disabled = true;
+    try {
+      const url = `/api/scans/${encodeURIComponent(state.scanId)}/export?tab=${encodeURIComponent(state.activeTab)}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`导出失败（HTTP ${response.status}）`);
+      }
+      const blob = await response.blob();
+      const filename = contentDispositionFilename(response) || `domain-scanner-${state.activeTab}-${state.scanId}.csv`;
+      const objectURL = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectURL;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectURL);
+      setMessage(`已导出 ${filename}`, "ok");
+    } catch (error) {
+      setMessage(error.message, "error");
+    } finally {
+      els.downloadButton.disabled = false;
+    }
+  }
+
+  function contentDispositionFilename(response) {
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="([^"]+)"/);
+    return match ? match[1] : "";
   }
 
   function rowsToCSV(rows) {

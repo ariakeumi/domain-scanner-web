@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Favicon**: PNG favicon and apple-touch-icon for the web UI
+- **Full CSV Export**: New `GET /api/scans/{id}/export?tab=available|registered|errors` endpoint streams a scan's results as a CSV download that is not capped by the in-memory result limit; every result is appended to `<dataDir>/exports/<scan-id>-<tab>.csv` as it arrives, and the "导出 CSV" button now downloads from this endpoint. Scans recorded before this change (or with persistence disabled) fall back to exporting the capped snapshot rows
 - **Scan History Persistence**: Finished scans are saved to `data/scans.json` (configurable via `-data`) and reloaded on startup, so history survives restarts; Docker Compose mounts a named volume at `/app/data`
 - **Docker Compose**: Added `docker-compose.yml` for one-command deployment (`docker compose up -d`), with `DOCKER_IMAGE` / `DOCKER_TAG` / `PORT` overrides
 - **Docker Support**: Multi-stage `Dockerfile` (non-root, CA certs, health check) plus a GitHub Actions workflow (`.github/workflows/docker.yml`) that builds `linux/amd64` + `linux/arm64` images and pushes them to Docker Hub on pushes to the default branch or `v*` tags
@@ -29,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cancel button is disabled while a scan is already in the canceling state
 
 ### Fixed
+- Scan history loss on container restart: the web server now handles SIGINT/SIGTERM by canceling in-flight scans and persisting their final state to `scans.json` before exiting (previously only already-finished scans were saved, so anything running at shutdown vanished); the Docker image's CMD now pins `-data /app/data` explicitly
 - "载入参数" button was not enabled for the latest scan on initial page load
 - Docker workflow: removed the invalid `{{is_tag}}` expression from the `enable` attribute of `docker/metadata-action` (replaced with `flavor: latest=auto`), which fixes the "Invalid value for enable attribute" error
 - Docker workflow: upgraded all GitHub Actions to Node 24 versions (`actions/checkout@v5`, `docker/setup-qemu-action@v4`, `docker/setup-buildx-action@v4`, `docker/login-action@v4`, `docker/metadata-action@v6`, `docker/build-push-action@v7`), clearing the Node.js 20 deprecation warning

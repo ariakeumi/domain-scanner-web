@@ -112,6 +112,7 @@ type Manager struct {
 	scans              map[string]*Scan
 	seq                uint64
 	store              *Store
+	dataDir            string
 	maxConcurrentScans int
 	maxTotalWorkers    int
 	scanSlots          chan struct{}
@@ -139,6 +140,7 @@ type Scan struct {
 	available       []Result
 	registered      []Result
 	errors          []Result
+	exporter        *resultExporter
 }
 
 // NewManager creates a scan manager. If dataDir is non-empty, finished scans
@@ -167,6 +169,7 @@ func NewManager(dataDir string) (*Manager, error) {
 	m := &Manager{
 		scans:              make(map[string]*Scan),
 		store:              store,
+		dataDir:            dataDir,
 		maxConcurrentScans: maxScans,
 		maxTotalWorkers:    maxTotalWorkers,
 		scanSlots:          make(chan struct{}, maxScans),
@@ -272,6 +275,9 @@ func (m *Manager) Start(options Options) (*Scan, error) {
 		available:   make([]Result, 0),
 		registered:  make([]Result, 0),
 		errors:      make([]Result, 0),
+	}
+	if m.dataDir != "" {
+		scan.exporter = newResultExporter(m.dataDir, id)
 	}
 
 	m.mu.Lock()
@@ -427,6 +433,46 @@ func (m *Manager) maxSeqForDate(date string) uint64 {
 	return max
 }
 
+// Shutdown cancels every queued or running scan and persists its final
+// state, so in-flight scans are not silently lost when the process stops
+// (docker stop / container restart sends SIGTERM). Finished scans were
+// already persisted when they completed.
+func (m *Manager) Shutdown() {
+	m.mu.RLock()
+	scans := make([]*Scan, 0, len(m.scans))
+	for _, s := range m.scans {
+		scans = append(scans, s)
+	}
+	m.mu.RUnlock()
+
+	for _, s := range scans {
+		if s.abort() {
+			m.persist(s)
+		}
+	}
+}
+
+// abort finalizes a queued or running scan as canceled without waiting for
+// its goroutines to wind down, returning true when the scan was
+// non-terminal and now needs persisting.
+func (s *Scan) abort() bool {
+	s.mu.Lock()
+	var cancel context.CancelFunc
+	switch s.status {
+	case StatusQueued, StatusRunning, StatusCanceling:
+		now := time.Now()
+		s.endedAt = &now
+		s.status = StatusCanceled
+		cancel = s.cancel
+		s.mu.Unlock()
+		cancel()
+		return true
+	default:
+		s.mu.Unlock()
+		return false
+	}
+}
+
 func (s *Scan) run(ctx context.Context, domainGen *generator.DomainGenerator) {
 	jobs := make(chan string, 1000)
 	results := make(chan types.DomainResult, 1000)
@@ -460,6 +506,7 @@ func (s *Scan) run(ctx context.Context, domainGen *generator.DomainGenerator) {
 		s.recordResult(result)
 	}
 
+	s.exporter.close()
 	s.finish(ctx.Err())
 }
 
@@ -557,39 +604,45 @@ func (s *Scan) recordResult(result types.DomainResult) {
 
 	checkedAt := time.Now()
 	if result.Error != nil {
-		s.mu.Lock()
-		s.errorCount++
-		s.appendResultLocked(&s.errors, Result{
+		row := Result{
 			Domain:    result.Domain,
 			Available: result.Available,
 			Error:     result.Error.Error(),
 			CheckedAt: checkedAt,
-		})
+		}
+		s.exporter.append(TabErrors, row)
+		s.mu.Lock()
+		s.errorCount++
+		s.appendResultLocked(&s.errors, row)
 		s.mu.Unlock()
 		return
 	}
 
 	if result.Available {
 		s.collector.IncrementAvailable()
-		s.mu.Lock()
-		s.appendResultLocked(&s.available, Result{
+		row := Result{
 			Domain:    result.Domain,
 			Available: true,
 			CheckedAt: checkedAt,
-		})
+		}
+		s.exporter.append(TabAvailable, row)
+		s.mu.Lock()
+		s.appendResultLocked(&s.available, row)
 		s.mu.Unlock()
 		return
 	}
 
 	if s.options.ShowRegistered {
-		s.mu.Lock()
-		s.registeredCount++
-		s.appendResultLocked(&s.registered, Result{
+		row := Result{
 			Domain:     result.Domain,
 			Available:  false,
 			Signatures: result.Signatures,
 			CheckedAt:  checkedAt,
-		})
+		}
+		s.exporter.append(TabRegistered, row)
+		s.mu.Lock()
+		s.registeredCount++
+		s.appendResultLocked(&s.registered, row)
 		s.mu.Unlock()
 	}
 }

@@ -2,13 +2,18 @@ package web
 
 import (
 	"bufio"
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"domain_scanner/internal/scanner"
@@ -60,7 +65,8 @@ func NewServer(dataDir string) (*Server, error) {
 }
 
 // ListenAndServe starts the web UI on addr, persisting scan history to dataDir
-// (pass "" to disable persistence).
+// (pass "" to disable persistence). On SIGINT/SIGTERM it cancels in-flight
+// scans, flushes their state to disk, and returns nil.
 func ListenAndServe(addr, dataDir string) error {
 	server, err := NewServer(dataDir)
 	if err != nil {
@@ -72,7 +78,26 @@ func ListenAndServe(addr, dataDir string) error {
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	return httpServer.ListenAndServe()
+
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- httpServer.ListenAndServe()
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case err := <-serveErr:
+		return err
+	case sig := <-sigCh:
+		fmt.Printf("received %v, persisting scan history before exit\n", sig)
+		server.Shutdown()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = httpServer.Shutdown(shutdownCtx)
+		return nil
+	}
 }
 
 // Handler returns the HTTP handler for the web UI and API.
@@ -169,6 +194,15 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(parts) == 2 && parts[1] == "export" {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleExport(w, r, id)
+		return
+	}
+
 	if len(parts) == 2 && parts[1] == "cancel" {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -184,6 +218,52 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeError(w, http.StatusNotFound, "scan not found")
+}
+
+// Shutdown cancels in-flight scans and persists their final state to disk.
+func (s *Server) Shutdown() {
+	s.manager.Shutdown()
+}
+
+// handleExport streams a scan's results as a CSV download. Results recorded
+// while the exporter was active are streamed straight from the on-disk CSV
+// file (no resultLimit cap); otherwise the snapshot's rows are written as a
+// fallback, so older scans still export.
+func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, id string) {
+	tab := r.URL.Query().Get("tab")
+	switch tab {
+	case scanner.TabAvailable, scanner.TabRegistered, scanner.TabErrors:
+	default:
+		writeError(w, http.StatusBadRequest, "invalid tab, use available, registered, or errors")
+		return
+	}
+
+	snap, ok := s.manager.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "scan not found")
+		return
+	}
+
+	filename := fmt.Sprintf("domain-scanner-%s-%s.csv", id, tab)
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+
+	if path, ok := s.manager.ExportFilePath(id, tab); ok {
+		f, err := os.Open(path)
+		if err != nil {
+			// Header is already sent; fall back to the snapshot inline.
+			snap, _ = s.manager.Get(id)
+			_ = scanner.WriteSnapshotCSV(w, snap, tab)
+			return
+		}
+		defer f.Close()
+		_, _ = io.Copy(w, f)
+		return
+	}
+
+	_ = scanner.WriteSnapshotCSV(w, snap, tab)
 }
 
 func splitDictionary(input string) []string {

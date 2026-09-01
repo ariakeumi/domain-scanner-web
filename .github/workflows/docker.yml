@@ -80,7 +80,9 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-,format=short
           flavor: |
-            latest=auto
+            # Always push :latest (docker-compose.yml pulls latest); every
+            # push to main/master and every v* tag updates it.
+            latest=true
           labels: |
             org.opencontainers.image.title=Domain Scanner
             org.opencontainers.image.description=Domain name availability checker with a built-in web UI
