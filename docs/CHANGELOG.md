@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **TLD Support Probe**: Each scan now pre-flights its suffix in the background (one real registry query, cached per TLD) and the UI warns when the registry refuses queries, has no WHOIS/RDAP service, or cannot give a clear verdict — instead of silently returning wrong or empty results. WHOIS queries that get no registry data or a rate-limit notice are now surfaced as per-domain errors (`无法获取注册局 WHOIS 数据…`) instead of being counted as unavailable
 - **Favicon**: PNG favicon and apple-touch-icon for the web UI
 - **Full CSV Export**: New `GET /api/scans/{id}/export?tab=available|registered|errors` endpoint streams a scan's results as a CSV download that is not capped by the in-memory result limit; every result is appended to `<dataDir>/exports/<scan-id>-<tab>.csv` as it arrives, and the "导出 CSV" button now downloads from this endpoint. Scans recorded before this change (or with persistence disabled) fall back to exporting the capped snapshot rows
 - **Scan History Persistence**: Finished scans are saved to `data/scans.json` (configurable via `-data`) and reloaded on startup, so history survives restarts; Docker Compose mounts a named volume at `/app/data`
@@ -31,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cancel button is disabled while a scan is already in the canceling state
 
 ### Fixed
+- False "available" results for ccTLDs: generic gTLD WHOIS servers (verisign, godaddy, …) answered "No match for <anything>" for ccTLD domains, which read as available; they are removed and direct registry servers are restricted per-TLD (.cx, .cz). `.nl`'s "example.nl is free" response format is now recognized (previously free .nl domains were silently classified as registered)
+- `.li` (and `.ch`) domains never scanned: SWITCH registries blocked port-43 WHOIS, so every query returned a service-error notice and domains could never be classified as available. These TLDs are now checked over RDAP (`rdap.nic.li` / `rdap.nic.ch`, HTTP 404 = available, 200 = registered), which is also ~20x faster than the old futile WHOIS retry loop; the WHOIS server list's broken `host:43` entries were corrected to bare hostnames
 - Scan history loss on container restart: the web server now handles SIGINT/SIGTERM by canceling in-flight scans and persisting their final state to `scans.json` before exiting (previously only already-finished scans were saved, so anything running at shutdown vanished); the Docker image's CMD now pins `-data /app/data` explicitly
 - "载入参数" button was not enabled for the latest scan on initial page load
 - Docker workflow: removed the invalid `{{is_tag}}` expression from the `enable` attribute of `docker/metadata-action` (replaced with `flavor: latest=auto`), which fixes the "Invalid value for enable attribute" error

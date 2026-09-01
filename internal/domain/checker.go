@@ -2,6 +2,8 @@ package domain
 
 import (
 	"crypto/tls"
+	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -18,16 +20,17 @@ var (
 	unavailableIndicatorsMap map[string]bool
 	indicatorsOnce           sync.Once
 
-	// WHOIS servers for domain availability checking
-	whoisServers = []string{
-		"", // Default flow (IANA lookup)
-		"whois.nic.li:43",
-		"whois.nic.cx:43",        // Christmas Island
-		"whois.nic.cz:43",        // Czech Republic
-		"whois.verisign-grs.com:43",
-		"whois.porkbun.com:43",
-		"whois.godaddy.com:43",
-		"whois.internic.net:43",
+	// Direct registry WHOIS servers per TLD, queried after the IANA referral
+	// flow (whoisServersFor). Only true ccTLD registries belong here: generic
+	// gTLD servers (verisign, godaddy, ...) answer "No match for <anything>"
+	// for ccTLD domains, which reads as "available" — a silent false-positive
+	// machine, so they must never be used as fallbacks.
+	//
+	// TLDs whose registry blocks port 43 (.li/.ch) never reach this map —
+	// they use RDAP.
+	tldWhoisServers = map[string][]string{
+		"cx": {"whois.nic.cx"}, // Christmas Island
+		"cz": {"whois.nic.cz"}, // Czech Republic
 	}
 
 	// WHOIS indicators for domain status detection
@@ -165,6 +168,8 @@ var (
 		"eligible for registration", "free for registration", "open for registration",
 		"ready for registration", "registration available", "status code: 210",
 		"status code: 220", "response: 210", "response: 220",
+		// .nl: SIDN answers "example.nl is free"
+		"is free", "is not registered", "is available",
 		// .cx specific indicators
 		"the queried object does not exist: no object found",
 		"the queried object does not exist",
@@ -233,6 +238,19 @@ func initIndicatorMaps() {
 	})
 }
 
+// whoisServersFor returns the WHOIS servers to try for a domain: the IANA
+// referral flow first (""), then the TLD's own registry if configured.
+// Cross-TLD fallbacks are deliberately not offered: generic gTLD servers
+// report "No match for" for any ccTLD domain, which reads as available.
+func whoisServersFor(domain string) []string {
+	tld := domain
+	if i := strings.LastIndex(domain, "."); i >= 0 {
+		tld = domain[i+1:]
+	}
+	servers := []string{""}
+	return append(servers, tldWhoisServers[strings.ToLower(tld)]...)
+}
+
 func CheckDomainSignatures(domain string) ([]string, error) {
 	var signatures []string
 
@@ -254,11 +272,19 @@ func CheckDomainSignatures(domain string) ([]string, error) {
 		signatures = append(signatures, "DNS_MX")
 	}
 
-	// 4. Check WHOIS information with retry
+	// 4. Check WHOIS information with retry. Registries that blocked port 43
+	// (.li/.ch) always answer with a service-error notice, so the loop below
+	// would only add ~15s of futile retries per domain — skip it and rely on
+	// DNS signatures plus the RDAP availability check instead.
+	if hasRDAPForDomain(domain) {
+		appendSSLSignature(&signatures, domain)
+		return signatures, nil
+	}
+
 	maxRetries := 3
 	baseDelay := 2 * time.Second
 
-	for _, server := range whoisServers {
+	for _, server := range whoisServersFor(domain) {
 		for i := 0; i < maxRetries; i++ {
 			var result string
 			var err error
@@ -303,6 +329,14 @@ func CheckDomainSignatures(domain string) ([]string, error) {
 	}
 
 	// 5. Check SSL certificate with timeout
+	appendSSLSignature(&signatures, domain)
+
+	return signatures, nil
+}
+
+// appendSSLSignature appends "SSL" when the domain serves a TLS certificate
+// on port 443.
+func appendSSLSignature(signatures *[]string, domain string) {
 	conn, err := tls.DialWithDialer(&net.Dialer{
 		Timeout: 5 * time.Second,
 	}, "tcp", domain+":443", &tls.Config{
@@ -312,17 +346,22 @@ func CheckDomainSignatures(domain string) ([]string, error) {
 		defer conn.Close()
 		state := conn.ConnectionState()
 		if len(state.PeerCertificates) > 0 {
-			signatures = append(signatures, "SSL")
+			*signatures = append(*signatures, "SSL")
 		}
 	}
-
-	return signatures, nil
 }
 
 func CheckDomainAvailability(domain string) (bool, error) {
 	// First check if domain is reserved by pattern or TLD rules
 	if reserved.IsReservedDomain(domain) {
 		return false, nil
+	}
+
+	// Registries that blocked port-43 WHOIS (e.g. .li/.ch via SWITCH) are
+	// checked over RDAP instead; their WHOIS path only ever returns a
+	// service-error notice.
+	if hasRDAPForDomain(domain) {
+		return rdapAvailable(domain)
 	}
 
 	signatures, err := CheckDomainSignatures(domain)
@@ -351,7 +390,7 @@ func checkWHOISAvailability(domain string) (bool, error) {
 	baseDelay := 2 * time.Second
 	foundAnyResult := false
 
-	for _, server := range whoisServers {
+	for _, server := range whoisServersFor(domain) {
 		for i := 0; i < maxRetries; i++ {
 			var result string
 			var err error
@@ -365,10 +404,12 @@ func checkWHOISAvailability(domain string) (bool, error) {
 				foundAnyResult = true
 				resultLower := strings.ToLower(result)
 
-				// FIRST: Check for service errors (should NOT be treated as "available")
+				// FIRST: Check for service errors. A registry refusal or
+				// rate limit says nothing about the domain — surface it as
+				// an error instead of silently counting the domain as
+				// unavailable.
 				if isServiceError(resultLower) {
-					// Service error - treat as unavailable to prevent false positives
-					return false, nil
+					return false, fmt.Errorf("注册局查询被拒绝或限流：%s", oneLine(result))
 				}
 
 				// SECOND: Check for available indicators
@@ -396,17 +437,36 @@ func checkWHOISAvailability(domain string) (bool, error) {
 		}
 	}
 
-	// CRITICAL CHANGE: Conservative approach to prevent false positives
-	// Default to UNAVAILABLE if no clear indication
-	// Better to miss a potentially available domain than to report a registered one as available
+	// No WHOIS data could be retrieved at all (registry without port-43
+	// service, empty responses, network trouble). That is a query failure,
+	// not an availability verdict — report it instead of silently marking
+	// every domain as unavailable.
 	if !foundAnyResult {
-		// No WHOIS data could be retrieved - assume domain is NOT available
-		return false, nil
+		return false, ErrNoWhoisData
 	}
 
 	// WHOIS data was retrieved but couldn't determine status
 	// Apply conservative approach: assume NOT available to prevent false positives
 	return false, nil
+}
+
+// ErrNoWhoisData is returned when no registry data could be retrieved for a
+// domain, so availability could not be checked at all.
+var ErrNoWhoisData = errors.New("无法获取注册局 WHOIS 数据（该后缀可能没有可用的查询服务，或网络受限）")
+
+// oneLine returns the first non-empty line of s, trimmed to 120 characters.
+func oneLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if len(line) > 120 {
+			line = line[:120] + "…"
+		}
+		return line
+	}
+	return s
 }
 
 func isAvailableFromWHOIS(result string) bool {

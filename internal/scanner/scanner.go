@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"domain_scanner/internal/domain"
 	"domain_scanner/internal/generator"
 	"domain_scanner/internal/stats"
 	"domain_scanner/internal/types"
@@ -63,30 +64,31 @@ type Result struct {
 
 // Snapshot is a point-in-time view of a scan.
 type Snapshot struct {
-	ID                  string     `json:"id"`
-	Status              string     `json:"status"`
-	Error               string     `json:"error,omitempty"`
-	Options             Options    `json:"options"`
-	Total               int64      `json:"total"`
-	Generated           int64      `json:"generated"`
-	Processed           int64      `json:"processed"`
-	AvailableCount      int64      `json:"availableCount"`
-	RegisteredCount     int64      `json:"registeredCount"`
-	ErrorCount          int64      `json:"errorCount"`
-	ActiveWorkers       int64      `json:"activeWorkers"`
-	QPS                 float64    `json:"qps"`
-	Progress            float64    `json:"progress"`
-	ETASeconds          int64      `json:"etaSeconds"`
-	StartedAt           time.Time  `json:"startedAt"`
-	EndedAt             *time.Time `json:"endedAt,omitempty"`
-	ElapsedSeconds      int64      `json:"elapsedSeconds"`
-	ResultLimit         int        `json:"resultLimit"`
-	AvailableTruncated  bool       `json:"availableTruncated"`
-	RegisteredTruncated bool       `json:"registeredTruncated"`
-	ErrorsTruncated     bool       `json:"errorsTruncated"`
-	Available           []Result   `json:"available"`
-	Registered          []Result   `json:"registered"`
-	Errors              []Result   `json:"errors"`
+	ID                  string          `json:"id"`
+	Status              string          `json:"status"`
+	Error               string          `json:"error,omitempty"`
+	Options             Options         `json:"options"`
+	Total               int64           `json:"total"`
+	Generated           int64           `json:"generated"`
+	Processed           int64           `json:"processed"`
+	AvailableCount      int64           `json:"availableCount"`
+	RegisteredCount     int64           `json:"registeredCount"`
+	ErrorCount          int64           `json:"errorCount"`
+	ActiveWorkers       int64           `json:"activeWorkers"`
+	QPS                 float64         `json:"qps"`
+	Progress            float64         `json:"progress"`
+	ETASeconds          int64           `json:"etaSeconds"`
+	StartedAt           time.Time       `json:"startedAt"`
+	EndedAt             *time.Time      `json:"endedAt,omitempty"`
+	ElapsedSeconds      int64           `json:"elapsedSeconds"`
+	ResultLimit         int             `json:"resultLimit"`
+	TLDProbe            domain.TLDProbe `json:"tldProbe"`
+	AvailableTruncated  bool            `json:"availableTruncated"`
+	RegisteredTruncated bool            `json:"registeredTruncated"`
+	ErrorsTruncated     bool            `json:"errorsTruncated"`
+	Available           []Result        `json:"available"`
+	Registered          []Result        `json:"registered"`
+	Errors              []Result        `json:"errors"`
 }
 
 // Config describes global concurrency limits and current load.
@@ -141,6 +143,7 @@ type Scan struct {
 	registered      []Result
 	errors          []Result
 	exporter        *resultExporter
+	tldProbe        domain.TLDProbe
 }
 
 // NewManager creates a scan manager. If dataDir is non-empty, finished scans
@@ -272,10 +275,20 @@ func (m *Manager) Start(options Options) (*Scan, error) {
 		startedAt:   time.Now(),
 		resultLimit: options.ResultLimit,
 		workerSlots: m.workerSlots,
+		tldProbe:    domain.TLDProbe{Status: domain.TLDProbing},
 		available:   make([]Result, 0),
 		registered:  make([]Result, 0),
 		errors:      make([]Result, 0),
 	}
+	// Probe the suffix's registry support in the background (cached per TLD,
+	// so only the first scan of a suffix pays for it) so the UI can warn
+	// about TLDs whose registries refuse or lack availability queries.
+	go func() {
+		probe := domain.ProbeTLD(options.Suffix)
+		scan.mu.Lock()
+		scan.tldProbe = probe
+		scan.mu.Unlock()
+	}()
 	if m.dataDir != "" {
 		scan.exporter = newResultExporter(m.dataDir, id)
 	}
@@ -590,6 +603,7 @@ func (s *Scan) Snapshot() Snapshot {
 		EndedAt:             endedAt,
 		ElapsedSeconds:      int64(now.Sub(startedAt).Seconds()),
 		ResultLimit:         resultLimit,
+		TLDProbe:            s.tldProbe,
 		AvailableTruncated:  availableCount > int64(len(available)),
 		RegisteredTruncated: registeredCount > int64(len(registered)),
 		ErrorsTruncated:     errorCount > int64(len(errors)),

@@ -458,8 +458,11 @@
     renderResults();
 
     const truncation = truncationNotice(snapshot);
+    const probe = tldProbeNotice(snapshot);
     if (snapshot.error) {
       setMessage(snapshot.error, "error");
+    } else if (probe) {
+      setMessage(probe, "error");
     } else if (truncation) {
       setMessage(truncation, "");
     } else if (snapshot.status === "queued") {
@@ -467,6 +470,14 @@
     } else if (!isActive(snapshot.status)) {
       setMessage(statusLabel(snapshot.status), snapshot.status === "completed" ? "ok" : "");
     }
+  }
+
+  function tldProbeNotice(snapshot) {
+    const probe = snapshot.tldProbe;
+    if (!probe || probe.status === "ok" || probe.status === "probing") {
+      return "";
+    }
+    return `⚠ ${probe.detail}，本任务的结果可能不完整或不可信`;
   }
 
   function truncationNotice(snapshot) {
